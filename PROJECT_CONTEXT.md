@@ -46,7 +46,8 @@ Each tool's `agent_skills[]` field bridges Layer 1 → Layer 3. See `skills/INDE
 - **Instruction-driven stages:** Each stage has a director skill (MD) that teaches the agent HOW
 - **Pipeline manifests:** Declarative YAML defining stages, skills, tools, review focus, approval gates
 - **Capability-first tool design:** Each major family should expose a selector tool plus explicit provider tools
-  - Example: `tts_selector` + `elevenlabs_tts` / `google_tts` / `openai_tts` / `piper_tts`
+  - Example: `tts_selector` + `elevenlabs_tts` / `google_tts` / `openai_tts` / `local_edge_tts` / `piper_tts`
+  - Example: analysis/transcription providers can also follow the explicit provider pattern even without a selector yet, e.g. `transcriber` + `local_whisper_stt` where the wrapper prefers the local gateway for non-diarized flows.
   - Example: `video_selector` + `heygen_video` / `wan_video` / `hunyuan_video` / `ltx_video_local` / `ltx_video_modal` / `cogvideo_video`
 - **Style playbooks:** YAML defining visual language, typography, motion, audio, asset generation constraints
 - **Artifacts are canonical:** `brief`, `script`, `scene_plan`, `asset_manifest`, `edit_decisions`, `render_report`, `publish_log`

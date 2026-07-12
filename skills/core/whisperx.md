@@ -12,12 +12,13 @@ scene analysis from dialogue.
 | Tool | Capability |
 |------|-----------|
 | `transcriber` | Speech-to-text with word timestamps, language detection, optional diarization |
+| `local_whisper_stt` | Local spark-41db gateway transcription with segments + word timestamps, no diarization |
 
 ## How It Works
 
-1. **Model loading:** faster-whisper loads the specified model size (tiny through large-v3). Defaults to `base` for speed. Use `large-v3` for production quality.
-2. **Transcription:** VAD filter removes silence. Word-level timestamps are always enabled.
-3. **Diarization (optional):** WhisperX alignment + pyannote speaker diarization assigns speaker labels. Requires `HF_TOKEN` environment variable.
+1. **Default local path:** for normal single-speaker / subtitle workflows, `transcriber` now prefers the live local gateway-backed provider `local_whisper_stt` when it is available at `http://127.0.0.1:30008`.
+2. **Structured transcription:** the local gateway returns `text`, `segments`, and `word_timestamps`, which is the shape `subtitle_gen` and transcript-driven QA expect.
+3. **Diarization (optional):** when `diarize=True`, `transcriber` falls back to the in-process WhisperX/faster-whisper path so speaker labeling can still happen. Diarization requires `whisperx` and usually `HF_TOKEN` for pyannote-backed speaker assignment.
 
 ## Model Size Guide
 
