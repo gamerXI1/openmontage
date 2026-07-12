@@ -97,6 +97,13 @@ class Transcriber(BaseTool):
 
     def get_status(self) -> ToolStatus:
         try:
+            from tools.analysis.local_whisper_stt import LocalWhisperSTT
+            if LocalWhisperSTT().get_status() == ToolStatus.AVAILABLE:
+                return ToolStatus.AVAILABLE
+        except Exception:
+            pass
+
+        try:
             import faster_whisper  # noqa: F401
             return ToolStatus.AVAILABLE
         except ImportError:
@@ -124,6 +131,22 @@ class Transcriber(BaseTool):
             return ToolResult(success=False, error=f"Input file not found: {input_path}")
 
         output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Prefer the live local gateway when available. It preserves the
+        # transcript shape OpenMontage expects (segments + word timings) and
+        # keeps call sites on a consistent provider boundary.
+        if not diarize:
+            try:
+                from tools.analysis.local_whisper_stt import LocalWhisperSTT
+                local_tool = LocalWhisperSTT()
+                if local_tool.get_status() == ToolStatus.AVAILABLE:
+                    return local_tool.execute({
+                        "input_path": str(input_path),
+                        "language": language,
+                        "output_dir": str(output_dir),
+                    })
+            except Exception:
+                pass
 
         try:
             from faster_whisper import WhisperModel
