@@ -34,6 +34,7 @@ from tools.tool_registry import ToolRegistry
 from tools.audio.elevenlabs_tts import ElevenLabsTTS
 from tools.audio.openai_tts import OpenAITTS
 from tools.audio.piper_tts import PiperTTS
+from tools.audio.local_edge_tts import LocalEdgeTTS
 from tools.audio.tts_selector import TTSSelector
 from tools.audio.google_tts import GoogleTTS
 from tools.graphics.google_imagen import GoogleImagen
@@ -636,10 +637,11 @@ class TestNewToolsRegistry:
         reg.register(ElevenLabsTTS())
         reg.register(OpenAITTS())
         reg.register(PiperTTS())
+        reg.register(LocalEdgeTTS())
         voice_tools = reg.get_by_tier(ToolTier.VOICE)
-        assert len(voice_tools) == 3
+        assert len(voice_tools) == 4
         names = {t.name for t in voice_tools}
-        assert names == {"elevenlabs_tts", "openai_tts", "piper_tts"}
+        assert names == {"elevenlabs_tts", "openai_tts", "piper_tts", "local_edge_tts"}
 
 
 class TestCapabilityMetadata:
@@ -659,11 +661,13 @@ class TestCapabilityMetadata:
         reg.register(ElevenLabsTTS())
         reg.register(OpenAITTS())
         reg.register(PiperTTS())
+        reg.register(LocalEdgeTTS())
         reg.register(TTSSelector())
         assert {tool.name for tool in reg.get_by_capability("tts")} == {
             "elevenlabs_tts",
             "openai_tts",
             "piper_tts",
+            "local_edge_tts",
             "tts_selector",
         }
         assert {tool.name for tool in reg.get_by_provider("elevenlabs")} == {
@@ -675,6 +679,7 @@ class TestCapabilityMetadata:
         reg.register(ElevenLabsTTS())
         reg.register(OpenAITTS())
         reg.register(PiperTTS())
+        reg.register(LocalEdgeTTS())
         catalog = reg.capability_catalog()
         assert "tts" in catalog
         providers = {item["provider"] for item in catalog["tts"] if item["provider"] != "selector"}
@@ -683,6 +688,7 @@ class TestCapabilityMetadata:
             "doubao",
             "elevenlabs",
             "google_tts",
+            "local_edge",
             "openai",
             "piper",
         }

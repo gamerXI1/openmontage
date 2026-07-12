@@ -150,9 +150,9 @@ Selectors route based on: user preference when explicitly set, then scored ranki
 
 ### Tool Inventory by Category
 
-**Analysis (4):** transcriber (WhisperX), scene_detect, frame_sampler, video_understand (CLIP/BLIP-2)
+**Analysis (5):** transcriber (local gateway first, WhisperX fallback), local_whisper_stt, scene_detect, frame_sampler, video_understand (CLIP/BLIP-2)
 
-**Audio (8):** elevenlabs_tts, google_tts, openai_tts, piper_tts, tts_selector, music_gen, audio_mixer, audio_enhance
+**Audio (9):** elevenlabs_tts, google_tts, openai_tts, local_edge_tts, piper_tts, tts_selector, music_gen, audio_mixer, audio_enhance
 
 **Avatar (2):** talking_head (SadTalker/MuseTalk), lip_sync (Wav2Lip)
 
