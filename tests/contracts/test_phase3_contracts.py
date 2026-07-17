@@ -35,6 +35,7 @@ from tools.audio.elevenlabs_tts import ElevenLabsTTS
 from tools.audio.openai_tts import OpenAITTS
 from tools.audio.piper_tts import PiperTTS
 from tools.audio.local_edge_tts import LocalEdgeTTS
+from tools.audio.local_kokoro_tts import LocalKokoroTTS
 from tools.audio.tts_selector import TTSSelector
 from tools.audio.google_tts import GoogleTTS
 from tools.graphics.google_imagen import GoogleImagen
@@ -135,6 +136,29 @@ class TestPiperTTS:
         monkeypatch.setattr(builtins, "__import__", fake_import)
 
         assert PiperTTS().get_status() == ToolStatus.UNAVAILABLE
+
+
+class TestLocalKokoroTTS:
+    def test_identity(self):
+        tool = LocalKokoroTTS()
+        info = tool.get_info()
+        assert info["name"] == "local_kokoro_tts"
+        assert info["tier"] == "voice"
+        assert info["capability"] == "tts"
+        assert info["provider"] == "kokoro"
+
+    def test_prefers_explicit_python_path(self, tmp_path):
+        tool = LocalKokoroTTS()
+        explicit = tmp_path / "kokoro-python"
+        explicit.write_text("#!/bin/sh\n")
+        selected = tool._python_path({"python_path": str(explicit)})
+        assert selected == str(explicit)
+
+    def test_status_uses_candidate_discovery_not_profile_path(self, monkeypatch, tmp_path):
+        candidate = tmp_path / "python3"
+        candidate.write_text("#!/bin/sh\n")
+        monkeypatch.setattr(LocalKokoroTTS, "_candidate_python_paths", classmethod(lambda cls, inputs: [str(candidate)]))
+        assert LocalKokoroTTS().get_status() == ToolStatus.AVAILABLE
 
 
 class TestGoogleTTS:
@@ -638,10 +662,11 @@ class TestNewToolsRegistry:
         reg.register(OpenAITTS())
         reg.register(PiperTTS())
         reg.register(LocalEdgeTTS())
+        reg.register(LocalKokoroTTS())
         voice_tools = reg.get_by_tier(ToolTier.VOICE)
-        assert len(voice_tools) == 4
+        assert len(voice_tools) == 5
         names = {t.name for t in voice_tools}
-        assert names == {"elevenlabs_tts", "openai_tts", "piper_tts", "local_edge_tts"}
+        assert names == {"elevenlabs_tts", "openai_tts", "piper_tts", "local_edge_tts", "local_kokoro_tts"}
 
 
 class TestCapabilityMetadata:
@@ -662,12 +687,14 @@ class TestCapabilityMetadata:
         reg.register(OpenAITTS())
         reg.register(PiperTTS())
         reg.register(LocalEdgeTTS())
+        reg.register(LocalKokoroTTS())
         reg.register(TTSSelector())
         assert {tool.name for tool in reg.get_by_capability("tts")} == {
             "elevenlabs_tts",
             "openai_tts",
             "piper_tts",
             "local_edge_tts",
+            "local_kokoro_tts",
             "tts_selector",
         }
         assert {tool.name for tool in reg.get_by_provider("elevenlabs")} == {
@@ -680,6 +707,7 @@ class TestCapabilityMetadata:
         reg.register(OpenAITTS())
         reg.register(PiperTTS())
         reg.register(LocalEdgeTTS())
+        reg.register(LocalKokoroTTS())
         catalog = reg.capability_catalog()
         assert "tts" in catalog
         providers = {item["provider"] for item in catalog["tts"] if item["provider"] != "selector"}
@@ -688,6 +716,7 @@ class TestCapabilityMetadata:
             "doubao",
             "elevenlabs",
             "google_tts",
+            "kokoro",
             "local_edge",
             "openai",
             "piper",

@@ -105,7 +105,7 @@ class TTSSelector(BaseTool):
             "preferred_provider": {
                 "type": "string",
                 "description": "Provider name or 'auto'. Valid values are discovered at runtime from the registry.",
-                "default": "auto",
+                "default": "kokoro",
             },
             "allowed_providers": {
                 "type": "array",
@@ -200,7 +200,7 @@ class TTSSelector(BaseTool):
         """Select the best TTS provider using scored ranking."""
         from lib.scoring import rank_providers
 
-        preferred = inputs.get("preferred_provider", "auto")
+        preferred = inputs.get("preferred_provider", "kokoro")
         allowed = set(inputs.get("allowed_providers") or [])
         if allowed:
             candidates = [tool for tool in candidates if tool.provider in allowed]
