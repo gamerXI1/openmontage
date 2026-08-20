@@ -16,7 +16,10 @@ from typing import Any
 
 import requests
 
-from tools._comfyui.workflow_profiles import resolve_comfyui_server_url
+from tools._comfyui.workflow_profiles import (
+    DEFAULT_COMFYUI_SERVER_URL,
+    resolve_comfyui_server_url,
+)
 
 
 class ComfyUIError(Exception):
@@ -35,6 +38,12 @@ class ComfyUIClient:
 
     def __init__(self, server_url: str | None = None) -> None:
         self.server_url = resolve_comfyui_server_url(server_url)
+        if server_url:
+            self._url_source = "explicit"
+        elif os.environ.get("COMFYUI_SERVER_URL"):
+            self._url_source = "env"
+        else:
+            self._url_source = "fallback"
 
     # ------------------------------------------------------------------
     # Health
@@ -42,8 +51,8 @@ class ComfyUIClient:
 
     @property
     def is_default_url(self) -> bool:
-        """True if using the repo-owned fallback URL (no explicit override set)."""
-        return not os.environ.get("COMFYUI_SERVER_URL")
+        """True if using the fallback URL with no explicit override set."""
+        return self._url_source == "fallback" and self.server_url == DEFAULT_COMFYUI_SERVER_URL
 
     def is_available(self) -> bool:
         """Return True if the ComfyUI server is reachable."""
@@ -62,12 +71,21 @@ class ComfyUIClient:
                 f"No ComfyUI server found at {self.server_url} "
                 f"(default — no COMFYUI_SERVER_URL configured).\n"
                 f"Set COMFYUI_SERVER_URL in your .env file to the address of "
-                f"your ComfyUI server (repo default: {self.server_url})."
+                f"your ComfyUI server (fallback default: {self.server_url})."
             )
         return (
             f"ComfyUI server not reachable at {self.server_url}.\n"
             f"Check that ComfyUI is running and the URL is correct."
         )
+
+    def has_node_class(self, node_class: str) -> bool:
+        try:
+            resp = requests.get(f"{self.server_url}/object_info/{node_class}", timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            return node_class in data
+        except Exception:
+            return False
 
     # ------------------------------------------------------------------
     # Model discovery

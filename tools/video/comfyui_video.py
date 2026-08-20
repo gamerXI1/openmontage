@@ -112,7 +112,8 @@ class ComfyUIVideo(BaseTool):
     install_instructions = (
         "Start a ComfyUI server and set COMFYUI_SERVER_URL "
         f"(default {DEFAULT_COMFYUI_SERVER_URL}).\n"
-        "Requires WAN 2.2 models and LightX2V LoRAs in ComfyUI's model directory."
+        "Bundled WAN workflows require WAN 2.2 models and LightX2V LoRAs. "
+        "The repo-owned ltx25_i2v_explicit_vae profile additionally requires the LTX 2.5 custom node stack and matching model files."
     )
     agent_skills = ["comfyui", "ai-video-gen", "ltx2"]
 
@@ -299,6 +300,21 @@ class ComfyUIVideo(BaseTool):
             )
 
         operation = inputs.get("operation", "text_to_video")
+        if profile_name:
+            profile_meta = get_video_workflow_profile(str(profile_name))
+            expected_operation = str(profile_meta["operation"])
+            if "operation" in inputs and operation != expected_operation:
+                return ToolResult(
+                    success=False,
+                    error=(
+                        f"workflow_profile {profile_name!r} only supports operation "
+                        f"{expected_operation!r}, got {operation!r}."
+                    ),
+                )
+            profile_ready_error = self._profile_readiness_error(profile_meta)
+            if profile_ready_error:
+                return ToolResult(success=False, error=profile_ready_error)
+            operation = expected_operation
 
         if not custom_workflow:
             required = _REQUIRED_MODELS_I2V if operation == "image_to_video" else _REQUIRED_MODELS_T2V
@@ -483,22 +499,53 @@ class ComfyUIVideo(BaseTool):
                 f"workflow_profile {profile_name!r} requires reference_image_path or reference_image_url"
             )
 
-        upload_name = f"om_{output_path.stem}.png"
+        upload_name = f"om_profile_ref.png"
         server_name = self._client.upload_image(Path(ref_path), upload_name)
         workflow = ComfyUIClient.load_workflow(Path(profile["workflow_path"]))
+        bindings = dict(profile.get("input_bindings", {}))
+        image_binding = bindings["reference_image"]
+        prompt_binding = bindings["prompt"]
+        neg_binding = bindings["negative_prompt"]
+        dims_binding = bindings["dimensions"]
+        seed_binding = bindings["seed"]
+        out_binding = bindings["output"]
         workflow = ComfyUIClient.patch_workflow(workflow, {
-            "4": {"image": server_name},
-            "6": {"text": inputs["prompt"]},
-            "7": {"text": inputs.get("negative_prompt", profile["default_negative_prompt"])},
-            "9": {
-                "width": inputs.get("width", profile["default_width"]),
-                "height": inputs.get("height", profile["default_height"]),
-                "length": inputs.get("num_frames", profile["default_num_frames"]),
+            str(image_binding["node"]): {str(image_binding["field"]): server_name},
+            str(prompt_binding["node"]): {str(prompt_binding["field"]): inputs["prompt"]},
+            str(neg_binding["node"]): {str(neg_binding["field"]): inputs.get("negative_prompt", profile["default_negative_prompt"])},
+            str(dims_binding["node"]): {
+                str(dims_binding["width_field"]): inputs.get("width", profile["default_width"]),
+                str(dims_binding["height_field"]): inputs.get("height", profile["default_height"]),
+                str(dims_binding["frames_field"]): inputs.get("num_frames", profile["default_num_frames"]),
             },
-            "10": {"seed": seed},
-            "12": {"filename_prefix": output_path.stem},
+            str(seed_binding["node"]): {str(seed_binding["field"]): seed},
+            str(out_binding["node"]): {str(out_binding["field"]): output_path.stem},
         })
         return workflow, str(profile["output_node"]), profile
+
+    def workflow_profile_ready(self, profile_name: str) -> bool:
+        profile = get_video_workflow_profile(profile_name)
+        return self._profile_readiness_error(profile) is None
+
+    def _profile_readiness_error(self, profile: dict[str, Any]) -> str | None:
+        missing_nodes = [
+            node_class
+            for node_class in profile.get("required_node_classes", [])
+            if not self._client.has_node_class(str(node_class))
+        ]
+        _, missing_models = self._client.check_models(list(profile.get("required_models", [])))
+        if not missing_nodes and not missing_models:
+            return None
+
+        parts: list[str] = []
+        if missing_nodes:
+            parts.append(f"missing node classes: {', '.join(missing_nodes)}")
+        if missing_models:
+            parts.append(f"missing models: {', '.join(missing_models)}")
+        return (
+            f"ComfyUI server is reachable but workflow_profile {profile['workflow_name']!r} is not runnable: "
+            + "; ".join(parts)
+        )
 
     @staticmethod
     def _load_custom_workflow(inputs: dict[str, Any]) -> dict:
@@ -550,10 +597,12 @@ class ComfyUIVideo(BaseTool):
                 "source": "repo_profile",
                 "workflow_profile": inputs.get("workflow_profile"),
                 "workflow_name": profile.get("workflow_name"),
-                "workflow_path": str(profile.get("workflow_path")),
+                "workflow_path": str(Path("tools") / "_comfyui" / "workflows" / str(profile.get("workflow_name"))),
                 "model": profile.get("workflow_model"),
                 "workflow_hash_sha256": workflow_hash(workflow),
                 "model_stack": profile.get("model_stack", []),
+                "required_node_classes": profile.get("required_node_classes", []),
+                "required_models": profile.get("required_models", []),
                 "model_stack_source": "repo_profile",
                 "output_node": output_node,
             }

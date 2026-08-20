@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-DEFAULT_COMFYUI_SERVER_URL = "http://127.0.0.1:9774"
+DEFAULT_COMFYUI_SERVER_URL = "http://localhost:8188"
 _WORKFLOW_DIR = Path(__file__).resolve().parent / "workflows"
 
 VIDEO_WORKFLOW_PROFILES: dict[str, dict[str, Any]] = {
@@ -20,6 +20,37 @@ VIDEO_WORKFLOW_PROFILES: dict[str, dict[str, Any]] = {
         "default_width": 512,
         "default_height": 320,
         "default_num_frames": 9,
+        "required_models": [
+            "ltx-2.5-22b-distilled-transformer-nvfp4.safetensors",
+            "ltx-2.5-video-vae-bf16.safetensors",
+            "gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot/model.safetensors",
+        ],
+        "required_node_classes": [
+            "CheckpointLoaderSimple",
+            "VAELoader",
+            "LTXVGemmaCLIPModelLoader",
+            "LoadImage",
+            "LTXVPreprocess",
+            "CLIPTextEncode",
+            "LTXVConditioning",
+            "LTXVImgToVideo",
+            "KSampler",
+            "VAEDecode",
+            "VHS_VideoCombine",
+        ],
+        "input_bindings": {
+            "reference_image": {"node": "4", "field": "image"},
+            "prompt": {"node": "6", "field": "text"},
+            "negative_prompt": {"node": "7", "field": "text"},
+            "dimensions": {
+                "node": "9",
+                "width_field": "width",
+                "height_field": "height",
+                "frames_field": "length",
+            },
+            "seed": {"node": "10", "field": "seed"},
+            "output": {"node": "12", "field": "filename_prefix"},
+        },
         "default_negative_prompt": (
             "blurry, warped face, extra limbs, aggressive motion, "
             "cinematic camera move, text, watermark"
@@ -75,4 +106,7 @@ def get_video_workflow_profile(name: str) -> dict[str, Any]:
         **profile,
         "workflow_path": Path(profile["workflow_path"]),
         "model_stack": [dict(item) for item in profile.get("model_stack", [])],
+        "required_models": list(profile.get("required_models", [])),
+        "required_node_classes": list(profile.get("required_node_classes", [])),
+        "input_bindings": dict(profile.get("input_bindings", {})),
     }

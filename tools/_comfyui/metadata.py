@@ -182,8 +182,20 @@ BUNDLED_MODEL_STACKS: dict[str, list[dict[str, Any]]] = {
 
 
 def workflow_hash(workflow: dict[str, Any]) -> str:
-    """Return a stable hash of the final workflow JSON submitted to ComfyUI."""
-    payload = json.dumps(workflow, sort_keys=True, separators=(",", ":"))
+    """Return a stable hash of workflow semantics, excluding transport-only output names."""
+    normalized = json.loads(json.dumps(workflow))
+    for node in normalized.values():
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        if "filename_prefix" in inputs:
+            inputs["filename_prefix"] = "__normalized_output__"
+        image_value = inputs.get("image")
+        if isinstance(image_value, str) and image_value.startswith("uploaded/"):
+            inputs["image"] = "__normalized_uploaded_image__"
+    payload = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
