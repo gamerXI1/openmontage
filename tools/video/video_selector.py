@@ -461,7 +461,13 @@ class VideoSelector(BaseTool):
         supports = getattr(tool, "supports", {})
         if not supports.get("custom_workflow"):
             return False
-        return tool.get_status() != ToolStatus.UNAVAILABLE
+        profile_name = inputs.get("workflow_profile")
+        if not profile_name:
+            return tool.get_status() != ToolStatus.UNAVAILABLE
+        checker = getattr(tool, "workflow_profile_ready", None)
+        if callable(checker):
+            return bool(checker(str(profile_name)))
+        return False
 
     def _tool_selectable(self, tool: BaseTool, inputs: dict[str, object]) -> bool:
         """A provider is selectable if it is AVAILABLE, or if it can serve a

@@ -297,12 +297,18 @@ class TestClientHelpers:
         monkeypatch.delenv("COMFYUI_SERVER_URL", raising=False)
         client = ComfyUIClient()
         assert client.is_default_url is True
-        assert client.server_url == "http://127.0.0.1:9774"
+        assert client.server_url == "http://localhost:8188"
 
     def test_is_not_default_url_when_env_set(self, monkeypatch):
         from tools._comfyui.client import ComfyUIClient
         monkeypatch.setenv("COMFYUI_SERVER_URL", "http://myhost:9999")
         client = ComfyUIClient()
+        assert client.is_default_url is False
+
+    def test_is_not_default_url_when_explicit_url_passed(self, monkeypatch):
+        from tools._comfyui.client import ComfyUIClient
+        monkeypatch.delenv("COMFYUI_SERVER_URL", raising=False)
+        client = ComfyUIClient("http://explicit:9999")
         assert client.is_default_url is False
 
     def test_unavailable_reason_default_url(self, monkeypatch):
@@ -444,6 +450,73 @@ class TestCustomWorkflowContract:
         assert result.data["workflow_provenance"]["source"] == "repo_profile"
         assert result.data["workflow_provenance"]["workflow_profile"] == "ltx25_i2v_explicit_vae"
         assert result.data["workflow_provenance"]["output_node"] == "12"
+        assert "LTXVGemmaCLIPModelLoader" in result.data["workflow_provenance"]["required_node_classes"]
+
+    def test_video_repo_workflow_profile_rejects_operation_mismatch(self, tmp_path):
+        tool = ComfyUIVideo()
+        tool._client.is_available = lambda: True
+        tool._client.has_node_class = lambda node_class: True
+        tool._client.check_models = lambda required: (list(required), [])
+
+        ref = tmp_path / "ref.png"
+        ref.write_bytes(b"png")
+        result = tool.execute({
+            "prompt": "subtle handheld motion",
+            "workflow_profile": "ltx25_i2v_explicit_vae",
+            "operation": "text_to_video",
+            "reference_image_path": str(ref),
+            "output_path": str(tmp_path / "video.mp4"),
+        })
+
+        assert result.success is False
+        assert "only supports operation" in result.error
+
+    def test_video_repo_workflow_profile_requires_profile_dependencies(self, tmp_path):
+        tool = ComfyUIVideo()
+        tool._client.is_available = lambda: True
+        tool._client.has_node_class = lambda node_class: node_class != "LTXVGemmaCLIPModelLoader"
+        tool._client.check_models = lambda required: ([], list(required))
+
+        ref = tmp_path / "ref.png"
+        ref.write_bytes(b"png")
+        result = tool.execute({
+            "prompt": "subtle handheld motion",
+            "workflow_profile": "ltx25_i2v_explicit_vae",
+            "reference_image_path": str(ref),
+            "output_path": str(tmp_path / "video.mp4"),
+        })
+
+        assert result.success is False
+        assert "not runnable" in result.error
+        assert "missing node classes" in result.error
+        assert "missing models" in result.error
+
+    def test_repo_profile_workflow_hash_ignores_output_path_noise(self, tmp_path):
+        tool = ComfyUIVideo()
+        tool._client.is_available = lambda: True
+        tool._client.has_node_class = lambda node_class: True
+        tool._client.check_models = lambda required: (list(required), [])
+        tool._client.upload_image = lambda local_path, name: f"uploaded/{name}"
+        tool._client.generate = lambda workflow, output_node, dest, **kwargs: [Path(dest)]
+
+        ref = tmp_path / "ref.png"
+        ref.write_bytes(b"png")
+        result_a = tool.execute({
+            "prompt": "subtle handheld motion",
+            "workflow_profile": "ltx25_i2v_explicit_vae",
+            "reference_image_path": str(ref),
+            "output_path": str(tmp_path / "a.mp4"),
+            "seed": 123,
+        })
+        result_b = tool.execute({
+            "prompt": "subtle handheld motion",
+            "workflow_profile": "ltx25_i2v_explicit_vae",
+            "reference_image_path": str(ref),
+            "output_path": str(tmp_path / "b.mp4"),
+            "seed": 123,
+        })
+
+        assert result_a.data["workflow_provenance"]["workflow_hash_sha256"] == result_b.data["workflow_provenance"]["workflow_hash_sha256"]
 
     def test_custom_workflow_accepts_model_stack_provenance(self, tmp_path):
         tool = ComfyUIVideo()
@@ -524,7 +597,7 @@ class TestComfyUISetupOffer:
         offer = summary["setup_offers"][0]
         assert offer["tool"] == "comfyui_image"
         assert offer["env_var"] == "COMFYUI_SERVER_URL"
-        assert offer["default_url"] == "http://127.0.0.1:9774"
+        assert offer["default_url"] == "http://localhost:8188"
         assert offer["health_check"] == "GET /system_stats"
 
 
@@ -623,8 +696,16 @@ class _DegradedComfyVideo(BaseTool):
     def is_operation_available(self, operation):
         return False
 
+    def workflow_profile_ready(self, profile_name):
+        return False
+
     def execute(self, inputs):
         raise AssertionError("not used")
+
+
+class _ProfileReadyComfyVideo(_DegradedComfyVideo):
+    def workflow_profile_ready(self, profile_name):
+        return profile_name == "ltx25_i2v_explicit_vae"
 
 
 class _DegradedComfyImage(BaseTool):
@@ -668,7 +749,7 @@ class TestCustomWorkflowSelectorEligibility:
 
     def test_video_selector_repo_workflow_profile_is_custom_workflow_eligible(self):
         selector = VideoSelector()
-        candidates = [_DegradedComfyVideo()]
+        candidates = [_ProfileReadyComfyVideo()]
         inputs = {
             "prompt": "x",
             "workflow_profile": "ltx25_i2v_explicit_vae",
@@ -677,6 +758,18 @@ class TestCustomWorkflowSelectorEligibility:
         filtered = selector._filter_candidates(inputs, candidates)
         assert [t.name for t in filtered] == ["comfyui_video"]
         assert selector._tool_selectable(candidates[0], inputs) is True
+
+    def test_video_selector_repo_workflow_profile_requires_profile_readiness(self):
+        selector = VideoSelector()
+        candidates = [_DegradedComfyVideo()]
+        inputs = {
+            "prompt": "x",
+            "workflow_profile": "ltx25_i2v_explicit_vae",
+            "operation": "image_to_video",
+        }
+        filtered = selector._filter_candidates(inputs, candidates)
+        assert filtered == []
+        assert selector._tool_selectable(candidates[0], inputs) is False
 
     def test_video_selector_custom_workflow_needs_server(self):
         class _OfflineComfyVideo(_DegradedComfyVideo):

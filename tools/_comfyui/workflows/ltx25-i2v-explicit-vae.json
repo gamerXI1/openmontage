@@ -22,7 +22,7 @@
   "4": {
     "class_type": "LoadImage",
     "inputs": {
-      "image": "nisha_indian_sultry_00001_.png"
+      "image": "profile_reference_image.png"
     }
   },
   "5": {
@@ -35,7 +35,7 @@
   "6": {
     "class_type": "CLIPTextEncode",
     "inputs": {
-      "text": "authentic UGC-style handheld selfie video, woman holding phone at arm's length, subtle blink, slight head tilt, natural micro-smile, gentle shoulder sway, realistic indoor light, casual social video vibe",
+      "text": "profile prompt placeholder",
       "clip": ["3", 0]
     }
   },
@@ -96,7 +96,7 @@
       "images": ["11", 0],
       "frame_rate": 8,
       "loop_count": 0,
-      "filename_prefix": "ltx25_ugc_nisha_explicitvae_verified",
+      "filename_prefix": "ltx25_profile_output",
       "format": "video/h264-mp4",
       "pix_fmt": "yuv420p",
       "crf": 19,
