@@ -34,6 +34,11 @@ from tools._comfyui.metadata import (
     model_stack,
     workflow_hash,
 )
+from tools._comfyui.workflow_profiles import (
+    DEFAULT_COMFYUI_SERVER_URL,
+    get_video_workflow_profile,
+    has_video_workflow_profile,
+)
 
 _WORKFLOWS = Path(__file__).resolve().parent.parent / "_comfyui" / "workflows"
 
@@ -106,7 +111,7 @@ class ComfyUIVideo(BaseTool):
     setup_offer = COMFYUI_SETUP_OFFER
     install_instructions = (
         "Start a ComfyUI server and set COMFYUI_SERVER_URL "
-        "(default http://localhost:8188).\n"
+        f"(default {DEFAULT_COMFYUI_SERVER_URL}).\n"
         "Requires WAN 2.2 models and LightX2V LoRAs in ComfyUI's model directory."
     )
     agent_skills = ["comfyui", "ai-video-gen", "ltx2"]
@@ -160,6 +165,13 @@ class ComfyUIVideo(BaseTool):
             "workflow_json": {
                 "type": "string",
                 "description": "Optional full ComfyUI workflow JSON. Requires output_node.",
+            },
+            "workflow_profile": {
+                "type": "string",
+                "description": (
+                    "Optional repo-owned custom workflow profile. "
+                    "Use ltx25_i2v_explicit_vae for the verified local LTX 2.5 I2V stack."
+                ),
             },
             "workflow_path": {
                 "type": "string",
@@ -257,8 +269,21 @@ class ComfyUIVideo(BaseTool):
         return 240.0  # ~4 min
 
     def execute(self, inputs: dict[str, Any]) -> ToolResult:
-        custom_workflow = bool(inputs.get("workflow_json") or inputs.get("workflow_path"))
-        if custom_workflow and not inputs.get("output_node"):
+        profile_name = inputs.get("workflow_profile")
+        custom_workflow = bool(
+            inputs.get("workflow_json")
+            or inputs.get("workflow_path")
+            or profile_name
+        )
+        if profile_name and not has_video_workflow_profile(str(profile_name)):
+            return ToolResult(
+                success=False,
+                error=(
+                    f"Unknown ComfyUI workflow_profile {profile_name!r}. "
+                    "Known profiles: ltx25_i2v_explicit_vae"
+                ),
+            )
+        if custom_workflow and not (inputs.get("output_node") or profile_name):
             return ToolResult(
                 success=False,
                 error=(
@@ -303,9 +328,19 @@ class ComfyUIVideo(BaseTool):
         output_path = Path(
             inputs.get("output_path", f"comfyui_video_{operation}_{seed}.mp4")
         )
+        fps = 16
 
         try:
-            if custom_workflow:
+            if profile_name:
+                workflow, output_node, profile_meta = self._build_profile_workflow(
+                    str(profile_name),
+                    inputs,
+                    seed,
+                    output_path,
+                )
+                operation = str(profile_meta["operation"])
+                fps = int(profile_meta.get("frame_rate", fps))
+            elif custom_workflow:
                 workflow = self._load_custom_workflow(inputs)
                 output_node = str(inputs["output_node"])
             elif operation == "image_to_video":
@@ -332,6 +367,11 @@ class ComfyUIVideo(BaseTool):
         width = inputs.get("width", 832 if operation == "text_to_video" else 640)
         height = inputs.get("height", 480 if operation == "text_to_video" else 640)
         num_frames = inputs.get("num_frames", 81)
+        if profile_name:
+            profile_meta = get_video_workflow_profile(str(profile_name))
+            width = inputs.get("width", int(profile_meta.get("default_width", width)))
+            height = inputs.get("height", int(profile_meta.get("default_height", height)))
+            num_frames = inputs.get("num_frames", int(profile_meta.get("default_num_frames", num_frames)))
 
         model_name = self._model_name(inputs, custom_workflow)
         return ToolResult(
@@ -344,8 +384,8 @@ class ComfyUIVideo(BaseTool):
                 "width": width,
                 "height": height,
                 "num_frames": num_frames,
-                "fps": 16,
-                "duration_seconds": round(num_frames / 16, 2),
+                "fps": fps,
+                "duration_seconds": round(num_frames / fps, 2),
                 "output": str(paths[0]),
                 "format": "mp4",
                 "workflow_provenance": provenance,
@@ -415,6 +455,51 @@ class ComfyUIVideo(BaseTool):
         })
         return workflow, _I2V_OUTPUT_NODE
 
+    def _build_profile_workflow(
+        self,
+        profile_name: str,
+        inputs: dict[str, Any],
+        seed: int,
+        output_path: Path,
+    ) -> tuple[dict[str, Any], str, dict[str, Any]]:
+        profile = get_video_workflow_profile(profile_name)
+        operation = str(profile["operation"])
+        if operation != "image_to_video":
+            raise ComfyUIError(
+                f"workflow_profile {profile_name!r} currently supports only image_to_video"
+            )
+
+        ref_path = inputs.get("reference_image_path")
+        ref_url = inputs.get("reference_image_url")
+        if ref_url and not ref_path:
+            resp = requests.get(ref_url, timeout=60)
+            resp.raise_for_status()
+            ref_path = str(output_path.with_suffix(".ref.png"))
+            Path(ref_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(ref_path).write_bytes(resp.content)
+
+        if not ref_path:
+            raise ComfyUIError(
+                f"workflow_profile {profile_name!r} requires reference_image_path or reference_image_url"
+            )
+
+        upload_name = f"om_{output_path.stem}.png"
+        server_name = self._client.upload_image(Path(ref_path), upload_name)
+        workflow = ComfyUIClient.load_workflow(Path(profile["workflow_path"]))
+        workflow = ComfyUIClient.patch_workflow(workflow, {
+            "4": {"image": server_name},
+            "6": {"text": inputs["prompt"]},
+            "7": {"text": inputs.get("negative_prompt", profile["default_negative_prompt"])},
+            "9": {
+                "width": inputs.get("width", profile["default_width"]),
+                "height": inputs.get("height", profile["default_height"]),
+                "length": inputs.get("num_frames", profile["default_num_frames"]),
+            },
+            "10": {"seed": seed},
+            "12": {"filename_prefix": output_path.stem},
+        })
+        return workflow, str(profile["output_node"]), profile
+
     @staticmethod
     def _load_custom_workflow(inputs: dict[str, Any]) -> dict:
         if inputs.get("workflow_json"):
@@ -425,6 +510,8 @@ class ComfyUIVideo(BaseTool):
     def _model_name(inputs: dict[str, Any], custom_workflow: bool) -> str:
         if not custom_workflow:
             return "wan2.2-14b-fp8-4step"
+        if inputs.get("workflow_profile"):
+            return str(inputs["workflow_profile"])
         return (
             inputs.get("workflow_model")
             or inputs.get("model")
@@ -455,6 +542,19 @@ class ComfyUIVideo(BaseTool):
                 ),
                 "workflow_hash_sha256": workflow_hash(workflow),
                 "model_stack": model_stack(workflow_key, inputs),
+                "output_node": output_node,
+            }
+        if inputs.get("workflow_profile"):
+            profile = get_video_workflow_profile(str(inputs["workflow_profile"]))
+            return {
+                "source": "repo_profile",
+                "workflow_profile": inputs.get("workflow_profile"),
+                "workflow_name": profile.get("workflow_name"),
+                "workflow_path": str(profile.get("workflow_path")),
+                "model": profile.get("workflow_model"),
+                "workflow_hash_sha256": workflow_hash(workflow),
+                "model_stack": profile.get("model_stack", []),
+                "model_stack_source": "repo_profile",
                 "output_node": output_node,
             }
         return {

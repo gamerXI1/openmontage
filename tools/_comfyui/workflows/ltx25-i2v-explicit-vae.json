@@ -1,0 +1,109 @@
+{
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "ltx-2.5-22b-distilled-transformer-nvfp4.safetensors"
+    }
+  },
+  "2": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "ltx-2.5-video-vae-bf16.safetensors"
+    }
+  },
+  "3": {
+    "class_type": "LTXVGemmaCLIPModelLoader",
+    "inputs": {
+      "gemma_path": "gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot/model.safetensors",
+      "ltxv_path": "ltx-2.5-22b-distilled-transformer-nvfp4.safetensors",
+      "max_length": 128
+    }
+  },
+  "4": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "nisha_indian_sultry_00001_.png"
+    }
+  },
+  "5": {
+    "class_type": "LTXVPreprocess",
+    "inputs": {
+      "image": ["4", 0],
+      "img_compression": 35
+    }
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "authentic UGC-style handheld selfie video, woman holding phone at arm's length, subtle blink, slight head tilt, natural micro-smile, gentle shoulder sway, realistic indoor light, casual social video vibe",
+      "clip": ["3", 0]
+    }
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "blurry, warped face, extra limbs, aggressive motion, cinematic camera move, text, watermark",
+      "clip": ["3", 0]
+    }
+  },
+  "8": {
+    "class_type": "LTXVConditioning",
+    "inputs": {
+      "positive": ["6", 0],
+      "negative": ["7", 0],
+      "frame_rate": 8
+    }
+  },
+  "9": {
+    "class_type": "LTXVImgToVideo",
+    "inputs": {
+      "positive": ["8", 0],
+      "negative": ["8", 1],
+      "vae": ["2", 0],
+      "image": ["5", 0],
+      "width": 512,
+      "height": 320,
+      "length": 9,
+      "batch_size": 1,
+      "strength": 0.8
+    }
+  },
+  "10": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["1", 0],
+      "seed": 424244,
+      "steps": 2,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0,
+      "positive": ["9", 0],
+      "negative": ["9", 1],
+      "latent_image": ["9", 2]
+    }
+  },
+  "11": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["10", 0],
+      "vae": ["2", 0]
+    }
+  },
+  "12": {
+    "class_type": "VHS_VideoCombine",
+    "inputs": {
+      "images": ["11", 0],
+      "frame_rate": 8,
+      "loop_count": 0,
+      "filename_prefix": "ltx25_ugc_nisha_explicitvae_verified",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 19,
+      "save_metadata": true,
+      "trim_to_audio": false,
+      "pingpong": false,
+      "save_output": true
+    }
+  }
+}
