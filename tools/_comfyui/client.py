@@ -7,6 +7,7 @@ download artifacts.  Used by comfyui_image, comfyui_video, and comfyui_music.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import random
@@ -87,6 +88,22 @@ class ComfyUIClient:
         except Exception:
             return False
 
+    def node_options(self, node_class: str, field: str) -> list[str]:
+        """Return enumerated options for a node input field, or [] if unavailable."""
+        try:
+            resp = requests.get(f"{self.server_url}/object_info/{node_class}", timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            options = (
+                data.get(node_class, {})
+                .get("input", {})
+                .get("required", {})
+                .get(field, [[]])[0]
+            )
+            return options if isinstance(options, list) else []
+        except Exception:
+            return []
+
     # ------------------------------------------------------------------
     # Model discovery
     # ------------------------------------------------------------------
@@ -114,19 +131,7 @@ class ComfyUIClient:
         result: dict[str, list[str]] = {}
         for node_class, (field, group) in node_to_key.items():
             try:
-                resp = requests.get(
-                    f"{self.server_url}/object_info/{node_class}", timeout=10
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                options = (
-                    data.get(node_class, {})
-                    .get("input", {})
-                    .get("required", {})
-                    .get(field, [[]])[0]
-                )
-                if isinstance(options, list):
-                    result[group] = options
+                result[group] = self.node_options(node_class, field)
             except Exception:
                 result[group] = []
         return result
@@ -179,6 +184,8 @@ class ComfyUIClient:
         interval: int = 5,
     ) -> dict:
         """Block until *prompt_id* finishes.  Returns the history entry."""
+        timeout = int(os.environ.get("COMFYUI_POLL_TIMEOUT", str(timeout)))
+        interval = int(os.environ.get("COMFYUI_POLL_INTERVAL", str(interval)))
         deadline = time.time() + timeout
         while time.time() < deadline:
             resp = requests.get(
@@ -218,6 +225,8 @@ class ComfyUIClient:
         resp.raise_for_status()
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(resp.content)
+        if dest.stat().st_size <= 0:
+            raise ComfyUIError(f"Downloaded empty artifact for {filename!r}")
         return dest
 
     def upload_image(self, local_path: Path, name: str) -> str:
@@ -233,6 +242,17 @@ class ComfyUIClient:
             )
         resp.raise_for_status()
         return resp.json()["name"]
+
+    @staticmethod
+    def unique_upload_name(local_path: Path, stem_hint: str, *, suffix: str | None = None) -> str:
+        ext = suffix or local_path.suffix or ".png"
+        digest = hashlib.sha256(
+            f"{local_path}:{time.time_ns()}:{random.random()}".encode()
+        ).hexdigest()[:12]
+        safe_stem = "".join(
+            ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in stem_hint
+        )[:48] or "upload"
+        return f"{safe_stem}_{digest}{ext}"
 
     # ------------------------------------------------------------------
     # High-level helper

@@ -25,6 +25,26 @@ VIDEO_WORKFLOW_PROFILES: dict[str, dict[str, Any]] = {
             "ltx-2.5-video-vae-bf16.safetensors",
             "gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot/model.safetensors",
         ],
+        "required_model_bindings": [
+            {
+                "role": "checkpoint",
+                "node_class": "CheckpointLoaderSimple",
+                "field": "ckpt_name",
+                "model": "ltx-2.5-22b-distilled-transformer-nvfp4.safetensors",
+            },
+            {
+                "role": "vae",
+                "node_class": "VAELoader",
+                "field": "vae_name",
+                "model": "ltx-2.5-video-vae-bf16.safetensors",
+            },
+            {
+                "role": "text_encoder",
+                "node_class": "LTXVGemmaCLIPModelLoader",
+                "field": "gemma_path",
+                "model": "gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot/model.safetensors",
+            },
+        ],
         "required_node_classes": [
             "CheckpointLoaderSimple",
             "VAELoader",
@@ -107,6 +127,7 @@ def get_video_workflow_profile(name: str) -> dict[str, Any]:
         "workflow_path": Path(profile["workflow_path"]),
         "model_stack": [dict(item) for item in profile.get("model_stack", [])],
         "required_models": list(profile.get("required_models", [])),
+        "required_model_bindings": [dict(item) for item in profile.get("required_model_bindings", [])],
         "required_node_classes": list(profile.get("required_node_classes", [])),
         "input_bindings": dict(profile.get("input_bindings", {})),
     }

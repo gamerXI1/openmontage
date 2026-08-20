@@ -421,6 +421,12 @@ class TestCustomWorkflowContract:
     def test_video_repo_workflow_profile_resolves_ltx25_i2v(self, tmp_path):
         tool = ComfyUIVideo()
         tool._client.is_available = lambda: True
+        tool._client.has_node_class = lambda node_class: True
+        tool._client.node_options = lambda node_class, field: {
+            ("CheckpointLoaderSimple", "ckpt_name"): ["ltx-2.5-22b-distilled-transformer-nvfp4.safetensors"],
+            ("VAELoader", "vae_name"): ["ltx-2.5-video-vae-bf16.safetensors"],
+            ("LTXVGemmaCLIPModelLoader", "gemma_path"): ["gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot/model.safetensors"],
+        }.get((node_class, field), [])
         tool._client.upload_image = lambda local_path, name: f"uploaded/{name}"
         seen = {}
 
@@ -456,7 +462,7 @@ class TestCustomWorkflowContract:
         tool = ComfyUIVideo()
         tool._client.is_available = lambda: True
         tool._client.has_node_class = lambda node_class: True
-        tool._client.check_models = lambda required: (list(required), [])
+        tool._client.node_options = lambda node_class, field: ["ok"]
 
         ref = tmp_path / "ref.png"
         ref.write_bytes(b"png")
@@ -475,7 +481,7 @@ class TestCustomWorkflowContract:
         tool = ComfyUIVideo()
         tool._client.is_available = lambda: True
         tool._client.has_node_class = lambda node_class: node_class != "LTXVGemmaCLIPModelLoader"
-        tool._client.check_models = lambda required: ([], list(required))
+        tool._client.node_options = lambda node_class, field: []
 
         ref = tmp_path / "ref.png"
         ref.write_bytes(b"png")
@@ -495,7 +501,11 @@ class TestCustomWorkflowContract:
         tool = ComfyUIVideo()
         tool._client.is_available = lambda: True
         tool._client.has_node_class = lambda node_class: True
-        tool._client.check_models = lambda required: (list(required), [])
+        tool._client.node_options = lambda node_class, field: {
+            ("CheckpointLoaderSimple", "ckpt_name"): ["ltx-2.5-22b-distilled-transformer-nvfp4.safetensors"],
+            ("VAELoader", "vae_name"): ["ltx-2.5-video-vae-bf16.safetensors"],
+            ("LTXVGemmaCLIPModelLoader", "gemma_path"): ["gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot/model.safetensors"],
+        }.get((node_class, field), [])
         tool._client.upload_image = lambda local_path, name: f"uploaded/{name}"
         tool._client.generate = lambda workflow, output_node, dest, **kwargs: [Path(dest)]
 
@@ -696,7 +706,7 @@ class _DegradedComfyVideo(BaseTool):
     def is_operation_available(self, operation):
         return False
 
-    def workflow_profile_ready(self, profile_name):
+    def workflow_profile_ready(self, profile_name, *, operation=None):
         return False
 
     def execute(self, inputs):
@@ -704,8 +714,8 @@ class _DegradedComfyVideo(BaseTool):
 
 
 class _ProfileReadyComfyVideo(_DegradedComfyVideo):
-    def workflow_profile_ready(self, profile_name):
-        return profile_name == "ltx25_i2v_explicit_vae"
+    def workflow_profile_ready(self, profile_name, *, operation=None):
+        return profile_name == "ltx25_i2v_explicit_vae" and operation == "image_to_video"
 
 
 class _DegradedComfyImage(BaseTool):
@@ -770,6 +780,16 @@ class TestCustomWorkflowSelectorEligibility:
         filtered = selector._filter_candidates(inputs, candidates)
         assert filtered == []
         assert selector._tool_selectable(candidates[0], inputs) is False
+
+    def test_video_selector_repo_workflow_profile_rejects_operation_mismatch(self):
+        selector = VideoSelector()
+        candidates = [_ProfileReadyComfyVideo()]
+        inputs = {
+            "prompt": "x",
+            "workflow_profile": "ltx25_i2v_explicit_vae",
+            "operation": "text_to_video",
+        }
+        assert selector._filter_candidates(inputs, candidates) == []
 
     def test_video_selector_custom_workflow_needs_server(self):
         class _OfflineComfyVideo(_DegradedComfyVideo):
