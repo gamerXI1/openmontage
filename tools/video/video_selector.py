@@ -466,7 +466,10 @@ class VideoSelector(BaseTool):
             return tool.get_status() != ToolStatus.UNAVAILABLE
         checker = getattr(tool, "workflow_profile_ready", None)
         if callable(checker):
-            return bool(checker(str(profile_name)))
+            return bool(checker(
+                str(profile_name),
+                operation=str(inputs.get("operation", "text_to_video")),
+            ))
         return False
 
     def _tool_selectable(self, tool: BaseTool, inputs: dict[str, object]) -> bool:

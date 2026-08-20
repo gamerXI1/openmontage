@@ -8,6 +8,7 @@ via the ``workflow_json`` input.
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -163,6 +164,10 @@ class ComfyUIVideo(BaseTool):
             "num_frames": {"type": "integer", "default": 81, "description": "81 frames = 5s at 16fps"},
             "seed": {"type": "integer", "description": "Random if omitted"},
             "output_path": {"type": "string", "description": "Where to save the video"},
+            "negative_prompt": {
+                "type": "string",
+                "description": "Optional negative prompt; supported by bundled and repo-profile ComfyUI video workflows.",
+            },
             "workflow_json": {
                 "type": "string",
                 "description": "Optional full ComfyUI workflow JSON. Requires output_node.",
@@ -345,6 +350,8 @@ class ComfyUIVideo(BaseTool):
             inputs.get("output_path", f"comfyui_video_{operation}_{seed}.mp4")
         )
         fps = 16
+        video_timeout = int(os.environ.get("COMFYUI_VIDEO_TIMEOUT", "900"))
+        poll_interval = int(os.environ.get("COMFYUI_POLL_INTERVAL", "10"))
 
         try:
             if profile_name:
@@ -371,8 +378,8 @@ class ComfyUIVideo(BaseTool):
                 workflow,
                 output_node=output_node,
                 dest=output_path,
-                timeout=900,
-                interval=10,
+                timeout=video_timeout,
+                interval=poll_interval,
             )
 
         except ComfyUIError as exc:
@@ -499,7 +506,7 @@ class ComfyUIVideo(BaseTool):
                 f"workflow_profile {profile_name!r} requires reference_image_path or reference_image_url"
             )
 
-        upload_name = f"om_profile_ref.png"
+        upload_name = ComfyUIClient.unique_upload_name(Path(ref_path), output_path.stem)
         server_name = self._client.upload_image(Path(ref_path), upload_name)
         workflow = ComfyUIClient.load_workflow(Path(profile["workflow_path"]))
         bindings = dict(profile.get("input_bindings", {}))
@@ -523,9 +530,20 @@ class ComfyUIVideo(BaseTool):
         })
         return workflow, str(profile["output_node"]), profile
 
-    def workflow_profile_ready(self, profile_name: str) -> bool:
+    def workflow_profile_ready(self, profile_name: str, *, operation: str | None = None) -> bool:
         profile = get_video_workflow_profile(profile_name)
+        if operation and operation != str(profile.get("operation")):
+            return False
         return self._profile_readiness_error(profile) is None
+
+    def workflow_profile_readiness_error(self, profile_name: str, *, operation: str | None = None) -> str | None:
+        profile = get_video_workflow_profile(profile_name)
+        if operation and operation != str(profile.get("operation")):
+            return (
+                f"workflow_profile {profile_name!r} only supports operation "
+                f"{str(profile.get('operation'))!r}, got {operation!r}."
+            )
+        return self._profile_readiness_error(profile)
 
     def _profile_readiness_error(self, profile: dict[str, Any]) -> str | None:
         missing_nodes = [
@@ -533,7 +551,22 @@ class ComfyUIVideo(BaseTool):
             for node_class in profile.get("required_node_classes", [])
             if not self._client.has_node_class(str(node_class))
         ]
-        _, missing_models = self._client.check_models(list(profile.get("required_models", [])))
+        found_models: set[str] = set()
+        missing_models: list[str] = []
+        for binding in profile.get("required_model_bindings", []):
+            model_name = str(binding.get("model"))
+            options = self._client.node_options(
+                str(binding.get("node_class")), str(binding.get("field"))
+            )
+            if model_name in options:
+                found_models.add(model_name)
+            else:
+                missing_models.append(model_name)
+        if not missing_models:
+            _, generic_missing = self._client.check_models(
+                [m for m in profile.get("required_models", []) if m not in found_models]
+            )
+            missing_models.extend(generic_missing)
         if not missing_nodes and not missing_models:
             return None
 
