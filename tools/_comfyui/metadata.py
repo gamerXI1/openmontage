@@ -6,12 +6,14 @@ import hashlib
 import json
 from typing import Any
 
+from tools._comfyui.workflow_profiles import DEFAULT_COMFYUI_SERVER_URL
+
 
 COMFYUI_SETUP_OFFER: dict[str, Any] = {
     "kind": "local_server",
     "fix_complexity": "1-minute env-var if ComfyUI is already running; otherwise local install",
     "env_var": "COMFYUI_SERVER_URL",
-    "default_url": "http://localhost:8188",
+    "default_url": DEFAULT_COMFYUI_SERVER_URL,
     "health_check": "GET /system_stats",
     "what_it_unlocks": [
         "free local image generation through ComfyUI workflows",

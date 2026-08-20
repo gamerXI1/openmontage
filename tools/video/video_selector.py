@@ -123,6 +123,13 @@ class VideoSelector(BaseTool):
                     "model readiness. Requires output_node."
                 ),
             },
+            "workflow_profile": {
+                "type": "string",
+                "description": (
+                    "Optional repo-owned ComfyUI workflow profile. "
+                    "Use ltx25_i2v_explicit_vae for the verified local LTX 2.5 I2V stack."
+                ),
+            },
             "workflow_path": {
                 "type": "string",
                 "description": (
@@ -433,7 +440,11 @@ class VideoSelector(BaseTool):
 
     @staticmethod
     def _has_custom_workflow(inputs: dict[str, object]) -> bool:
-        return bool(inputs.get("workflow_json") or inputs.get("workflow_path"))
+        return bool(
+            inputs.get("workflow_json")
+            or inputs.get("workflow_path")
+            or inputs.get("workflow_profile")
+        )
 
     def _custom_workflow_eligible(self, tool: BaseTool, inputs: dict[str, object]) -> bool:
         """Whether a tool can run the caller-supplied custom workflow.
@@ -445,7 +456,7 @@ class VideoSelector(BaseTool):
         """
         if not self._has_custom_workflow(inputs):
             return False
-        if not inputs.get("output_node"):
+        if not (inputs.get("output_node") or inputs.get("workflow_profile")):
             return False
         supports = getattr(tool, "supports", {})
         if not supports.get("custom_workflow"):

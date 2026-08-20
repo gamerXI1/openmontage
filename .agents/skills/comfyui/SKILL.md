@@ -9,7 +9,7 @@ Use this skill before calling `comfyui_image` or `comfyui_video`, and when conve
 
 ## Server Contract
 
-- ComfyUI must be running before the tool can generate. The default server is `http://localhost:8188`; override it with `COMFYUI_SERVER_URL`.
+- ComfyUI must be running before the tool can generate. The repo-owned default server is `http://127.0.0.1:9774`; override it with `COMFYUI_SERVER_URL` when needed.
 - Health and hardware status come from `GET /system_stats`.
 - Jobs are submitted to `POST /prompt`, completed outputs are read from `GET /history/{prompt_id}`, and artifact bytes are downloaded with `GET /view`.
 - Export workflows with ComfyUI's API-format JSON, not the UI layout format. If a downloaded workflow will not submit, re-export it from ComfyUI with API format enabled.
@@ -18,6 +18,7 @@ Use this skill before calling `comfyui_image` or `comfyui_video`, and when conve
 
 - Use bundled workflows when the requested operation matches and the local machine has the required models and VRAM.
 - Use a custom `workflow_json` or `workflow_path` when the user needs a community recipe, a lower-VRAM model, a different style family, or custom nodes.
+- Prefer the repo-owned `workflow_profile="ltx25_i2v_explicit_vae"` path for the verified local LTX 2.5 image-to-video stack instead of hand-supplying raw `workflow_path` and `output_node`.
 - For 8GB-12GB GPUs, prefer lower-footprint workflows such as Wan 2.1 1.3B, LTXV FP8 or quantized workflows, or Wan 2.2 GGUF/quantized community workflows. The bundled Wan 2.2 14B FP8 video workflows are a 16GB-class path, not a provider-wide floor.
 - Do not promise that arbitrary custom workflows will fit a machine. The workflow, quantization, resolution, frame count, and offload settings determine the real resource envelope.
 

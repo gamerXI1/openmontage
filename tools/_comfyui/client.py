@@ -16,6 +16,8 @@ from typing import Any
 
 import requests
 
+from tools._comfyui.workflow_profiles import resolve_comfyui_server_url
+
 
 class ComfyUIError(Exception):
     """Raised when ComfyUI returns an error or times out."""
@@ -32,10 +34,7 @@ class ComfyUIClient:
     """
 
     def __init__(self, server_url: str | None = None) -> None:
-        self.server_url = (
-            server_url
-            or os.environ.get("COMFYUI_SERVER_URL", "http://localhost:8188")
-        ).rstrip("/")
+        self.server_url = resolve_comfyui_server_url(server_url)
 
     # ------------------------------------------------------------------
     # Health
@@ -43,7 +42,7 @@ class ComfyUIClient:
 
     @property
     def is_default_url(self) -> bool:
-        """True if using the fallback URL (user didn't set COMFYUI_SERVER_URL)."""
+        """True if using the repo-owned fallback URL (no explicit override set)."""
         return not os.environ.get("COMFYUI_SERVER_URL")
 
     def is_available(self) -> bool:
@@ -63,7 +62,7 @@ class ComfyUIClient:
                 f"No ComfyUI server found at {self.server_url} "
                 f"(default — no COMFYUI_SERVER_URL configured).\n"
                 f"Set COMFYUI_SERVER_URL in your .env file to the address of "
-                f"your ComfyUI server (e.g. http://localhost:8188)."
+                f"your ComfyUI server (repo default: {self.server_url})."
             )
         return (
             f"ComfyUI server not reachable at {self.server_url}.\n"
