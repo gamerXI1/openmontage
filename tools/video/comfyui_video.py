@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -371,15 +372,21 @@ class ComfyUIVideo(BaseTool):
             else:
                 workflow, output_node = self._build_t2v(inputs, seed, output_path)
 
-            provenance = self._workflow_provenance(
-                inputs, custom_workflow, output_node, operation, workflow
-            )
             paths = self._client.generate(
                 workflow,
                 output_node=output_node,
                 dest=output_path,
                 timeout=video_timeout,
                 interval=poll_interval,
+            )
+            self._validate_video_artifacts(paths)
+            provenance = self._workflow_provenance(
+                inputs,
+                custom_workflow,
+                output_node,
+                operation,
+                workflow,
+                runtime_metadata=getattr(self._client, "last_run_metadata", {}),
             )
 
         except ComfyUIError as exc:
@@ -528,7 +535,49 @@ class ComfyUIVideo(BaseTool):
             str(seed_binding["node"]): {str(seed_binding["field"]): seed},
             str(out_binding["node"]): {str(out_binding["field"]): output_path.stem},
         })
+        self._client.last_run_metadata = {
+            "upload_name": upload_name,
+            "server_upload_name": server_name,
+            "server_url": self._client.server_url,
+        }
         return workflow, str(profile["output_node"]), profile
+
+    def _validate_video_artifacts(self, paths: list[Path]) -> None:
+        for path in paths:
+            if not path.exists() or path.stat().st_size <= 0:
+                raise ComfyUIError(f"Generated video artifact missing or empty: {path}")
+            probe = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "stream=codec_name,nb_frames",
+                    "-show_entries",
+                    "format=duration,size",
+                    "-of",
+                    "json",
+                    str(path),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if probe.returncode != 0:
+                raise ComfyUIError(
+                    f"Generated video artifact is not a valid playable media file: {path} ({probe.stderr.strip()})"
+                )
+            try:
+                payload = json.loads(probe.stdout or "{}")
+            except json.JSONDecodeError as exc:
+                raise ComfyUIError(
+                    f"Generated video artifact probe returned invalid JSON for {path}: {exc}"
+                ) from exc
+            streams = payload.get("streams", [])
+            fmt = payload.get("format", {})
+            if not streams:
+                raise ComfyUIError(f"Generated video artifact has no media streams: {path}")
+            if float(fmt.get("duration", 0) or 0) <= 0:
+                raise ComfyUIError(f"Generated video artifact has non-positive duration: {path}")
 
     def workflow_profile_ready(self, profile_name: str, *, operation: str | None = None) -> bool:
         profile = get_video_workflow_profile(profile_name)
@@ -537,6 +586,8 @@ class ComfyUIVideo(BaseTool):
         return self._profile_readiness_error(profile) is None
 
     def workflow_profile_readiness_error(self, profile_name: str, *, operation: str | None = None) -> str | None:
+        if not self._client.is_available():
+            return self._client.unavailable_reason()
         profile = get_video_workflow_profile(profile_name)
         if operation and operation != str(profile.get("operation")):
             return (
@@ -546,22 +597,40 @@ class ComfyUIVideo(BaseTool):
         return self._profile_readiness_error(profile)
 
     def _profile_readiness_error(self, profile: dict[str, Any]) -> str | None:
-        missing_nodes = [
-            node_class
-            for node_class in profile.get("required_node_classes", [])
-            if not self._client.has_node_class(str(node_class))
-        ]
+        probe_errors: list[str] = []
+        missing_nodes: list[str] = []
+        for node_class in profile.get("required_node_classes", []):
+            try:
+                data = self._client.object_info(str(node_class))
+            except Exception as exc:
+                probe_errors.append(str(exc))
+                continue
+            if str(node_class) not in data:
+                missing_nodes.append(str(node_class))
         found_models: set[str] = set()
         missing_models: list[str] = []
         for binding in profile.get("required_model_bindings", []):
             model_name = str(binding.get("model"))
-            options = self._client.node_options(
-                str(binding.get("node_class")), str(binding.get("field"))
-            )
+            try:
+                options = self._client.node_options(
+                    str(binding.get("node_class")), str(binding.get("field"))
+                )
+            except Exception as exc:
+                probe_errors.append(str(exc))
+                continue
             if model_name in options:
                 found_models.add(model_name)
             else:
                 missing_models.append(model_name)
+        if probe_errors:
+            unique_probe_errors = []
+            for err in probe_errors:
+                if err not in unique_probe_errors:
+                    unique_probe_errors.append(err)
+            return (
+                f"ComfyUI readiness probe failed for workflow_profile {profile['workflow_name']!r}: "
+                + " | ".join(unique_probe_errors)
+            )
         if not missing_models:
             _, generic_missing = self._client.check_models(
                 [m for m in profile.get("required_models", []) if m not in found_models]
@@ -606,6 +675,7 @@ class ComfyUIVideo(BaseTool):
         output_node: str,
         operation: str,
         workflow: dict[str, Any],
+        runtime_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if not custom_workflow:
             workflow_key = (
@@ -626,6 +696,8 @@ class ComfyUIVideo(BaseTool):
             }
         if inputs.get("workflow_profile"):
             profile = get_video_workflow_profile(str(inputs["workflow_profile"]))
+            metadata = runtime_metadata or {}
+            artifact_meta = metadata.get("artifacts", [])
             return {
                 "source": "repo_profile",
                 "workflow_profile": inputs.get("workflow_profile"),
@@ -638,6 +710,11 @@ class ComfyUIVideo(BaseTool):
                 "required_models": profile.get("required_models", []),
                 "model_stack_source": "repo_profile",
                 "output_node": output_node,
+                "server_url": metadata.get("server_url"),
+                "prompt_id": metadata.get("prompt_id"),
+                "upload_name": metadata.get("upload_name"),
+                "server_upload_name": metadata.get("server_upload_name"),
+                "artifact_records": artifact_meta,
             }
         return {
             "source": "user_supplied",

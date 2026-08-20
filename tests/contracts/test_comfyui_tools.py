@@ -327,6 +327,33 @@ class TestClientHelpers:
         assert "myhost:9999" in msg
         assert "COMFYUI_SERVER_URL" not in msg
 
+    def test_poll_retries_transient_history_failure(self, monkeypatch):
+        from tools._comfyui.client import ComfyUIClient
+        import requests
+
+        client = ComfyUIClient("http://comfy.test")
+        calls = {"n": 0}
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"pid": {"status": {"status_str": "success"}, "outputs": {}}}
+
+        def fake_get(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise requests.HTTPError("502 boom")
+            return FakeResponse()
+
+        monkeypatch.setattr("tools._comfyui.client.requests.get", fake_get)
+        monkeypatch.setattr("tools._comfyui.client.time.sleep", lambda *_: None)
+
+        entry = client.poll("pid", timeout=5, interval=0)
+        assert calls["n"] == 2
+        assert entry["status"]["status_str"] == "success"
+
 
 # ------------------------------------------------------------------
 # Model discovery (offline, no server needed)
@@ -390,11 +417,13 @@ class TestCustomWorkflowContract:
     def test_video_custom_workflow_uses_caller_output_node_and_provenance(self, tmp_path):
         tool = ComfyUIVideo()
         tool._client.is_available = lambda: True
+        tool._validate_video_artifacts = lambda paths: None
         seen = {}
 
         def fake_generate(workflow, output_node, dest, **kwargs):
             seen["workflow"] = workflow
             seen["output_node"] = output_node
+            tool._client.last_run_metadata = {"prompt_id": "pid-1", "artifacts": []}
             return [Path(dest)]
 
         tool._client.generate = fake_generate
@@ -421,18 +450,26 @@ class TestCustomWorkflowContract:
     def test_video_repo_workflow_profile_resolves_ltx25_i2v(self, tmp_path):
         tool = ComfyUIVideo()
         tool._client.is_available = lambda: True
-        tool._client.has_node_class = lambda node_class: True
+        tool._client.object_info = lambda node_class: {node_class: {}}
         tool._client.node_options = lambda node_class, field: {
             ("CheckpointLoaderSimple", "ckpt_name"): ["ltx-2.5-22b-distilled-transformer-nvfp4.safetensors"],
             ("VAELoader", "vae_name"): ["ltx-2.5-video-vae-bf16.safetensors"],
             ("LTXVGemmaCLIPModelLoader", "gemma_path"): ["gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot/model.safetensors"],
         }.get((node_class, field), [])
+        tool._validate_video_artifacts = lambda paths: None
         tool._client.upload_image = lambda local_path, name: f"uploaded/{name}"
         seen = {}
 
         def fake_generate(workflow, output_node, dest, **kwargs):
             seen["workflow"] = workflow
             seen["output_node"] = output_node
+            tool._client.last_run_metadata = {
+                "prompt_id": "pid-2",
+                "server_url": "http://127.0.0.1:9774",
+                "upload_name": "local.png",
+                "server_upload_name": "uploaded/local.png",
+                "artifacts": [{"filename": "video.mp4", "subfolder": "", "type": "output"}],
+            }
             return [Path(dest)]
 
         tool._client.generate = fake_generate
@@ -456,6 +493,9 @@ class TestCustomWorkflowContract:
         assert result.data["workflow_provenance"]["source"] == "repo_profile"
         assert result.data["workflow_provenance"]["workflow_profile"] == "ltx25_i2v_explicit_vae"
         assert result.data["workflow_provenance"]["output_node"] == "12"
+        assert result.data["workflow_provenance"]["prompt_id"] == "pid-2"
+        assert result.data["workflow_provenance"]["server_url"] == "http://127.0.0.1:9774"
+        assert result.data["workflow_provenance"]["server_upload_name"] == "uploaded/local.png"
         assert "LTXVGemmaCLIPModelLoader" in result.data["workflow_provenance"]["required_node_classes"]
 
     def test_video_repo_workflow_profile_rejects_operation_mismatch(self, tmp_path):
@@ -480,7 +520,7 @@ class TestCustomWorkflowContract:
     def test_video_repo_workflow_profile_requires_profile_dependencies(self, tmp_path):
         tool = ComfyUIVideo()
         tool._client.is_available = lambda: True
-        tool._client.has_node_class = lambda node_class: node_class != "LTXVGemmaCLIPModelLoader"
+        tool._client.object_info = lambda node_class: {} if node_class == "LTXVGemmaCLIPModelLoader" else {node_class: {}}
         tool._client.node_options = lambda node_class, field: []
 
         ref = tmp_path / "ref.png"
@@ -497,17 +537,49 @@ class TestCustomWorkflowContract:
         assert "missing node classes" in result.error
         assert "missing models" in result.error
 
+    def test_video_repo_workflow_profile_probe_failure_is_not_misreported_as_missing_dependency(self, tmp_path):
+        from tools._comfyui.client import ComfyUIProbeError
+
+        tool = ComfyUIVideo()
+        tool._client.is_available = lambda: True
+
+        def fake_object_info(node_class):
+            if node_class == "CheckpointLoaderSimple":
+                raise ComfyUIProbeError("Failed to query ComfyUI object_info for CheckpointLoaderSimple: 502 boom")
+            return {node_class: {}}
+
+        tool._client.object_info = fake_object_info
+        tool._client.node_options = lambda node_class, field: ["ok"]
+
+        ref = tmp_path / "ref.png"
+        ref.write_bytes(b"png")
+        result = tool.execute({
+            "prompt": "subtle handheld motion",
+            "workflow_profile": "ltx25_i2v_explicit_vae",
+            "reference_image_path": str(ref),
+            "output_path": str(tmp_path / "video.mp4"),
+        })
+
+        assert result.success is False
+        assert result.error is not None
+        assert "readiness probe failed" in result.error
+        assert "missing node classes" not in result.error
+
     def test_repo_profile_workflow_hash_ignores_output_path_noise(self, tmp_path):
         tool = ComfyUIVideo()
         tool._client.is_available = lambda: True
-        tool._client.has_node_class = lambda node_class: True
+        tool._client.object_info = lambda node_class: {node_class: {}}
         tool._client.node_options = lambda node_class, field: {
             ("CheckpointLoaderSimple", "ckpt_name"): ["ltx-2.5-22b-distilled-transformer-nvfp4.safetensors"],
             ("VAELoader", "vae_name"): ["ltx-2.5-video-vae-bf16.safetensors"],
             ("LTXVGemmaCLIPModelLoader", "gemma_path"): ["gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot/model.safetensors"],
         }.get((node_class, field), [])
+        tool._validate_video_artifacts = lambda paths: None
         tool._client.upload_image = lambda local_path, name: f"uploaded/{name}"
-        tool._client.generate = lambda workflow, output_node, dest, **kwargs: [Path(dest)]
+        def fake_generate(workflow, output_node, dest, **kwargs):
+            tool._client.last_run_metadata = {"prompt_id": "pid-3", "artifacts": []}
+            return [Path(dest)]
+        tool._client.generate = fake_generate
 
         ref = tmp_path / "ref.png"
         ref.write_bytes(b"png")
@@ -531,7 +603,11 @@ class TestCustomWorkflowContract:
     def test_custom_workflow_accepts_model_stack_provenance(self, tmp_path):
         tool = ComfyUIVideo()
         tool._client.is_available = lambda: True
-        tool._client.generate = lambda workflow, output_node, dest, **kwargs: [Path(dest)]
+        tool._validate_video_artifacts = lambda paths: None
+        def fake_generate(workflow, output_node, dest, **kwargs):
+            tool._client.last_run_metadata = {"prompt_id": "pid-4", "artifacts": []}
+            return [Path(dest)]
+        tool._client.generate = fake_generate
 
         result = tool.execute({
             "prompt": "test",
