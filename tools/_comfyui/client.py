@@ -27,6 +27,10 @@ class ComfyUIError(Exception):
     """Raised when ComfyUI returns an error or times out."""
 
 
+class ComfyUIProbeError(ComfyUIError):
+    """Raised when metadata/probe endpoints fail transiently or unexpectedly."""
+
+
 class ComfyUIClient:
     """Client for the ComfyUI REST API.
 
@@ -81,12 +85,20 @@ class ComfyUIClient:
 
     def has_node_class(self, node_class: str) -> bool:
         try:
-            resp = requests.get(f"{self.server_url}/object_info/{node_class}", timeout=10)
-            resp.raise_for_status()
-            data = resp.json()
+            data = self.object_info(node_class)
             return node_class in data
         except Exception:
             return False
+
+    def object_info(self, node_class: str) -> dict[str, Any]:
+        try:
+            resp = requests.get(f"{self.server_url}/object_info/{node_class}", timeout=10)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as exc:
+            raise ComfyUIProbeError(
+                f"Failed to query ComfyUI object_info for {node_class}: {exc}"
+            ) from exc
 
     def node_options(self, node_class: str, field: str) -> list[str]:
         """Return enumerated options for a node input field, or [] if unavailable."""
@@ -187,12 +199,19 @@ class ComfyUIClient:
         timeout = int(os.environ.get("COMFYUI_POLL_TIMEOUT", str(timeout)))
         interval = int(os.environ.get("COMFYUI_POLL_INTERVAL", str(interval)))
         deadline = time.time() + timeout
+        last_error: Exception | None = None
         while time.time() < deadline:
-            resp = requests.get(
-                f"{self.server_url}/history/{prompt_id}", timeout=10
-            )
-            resp.raise_for_status()
-            history = resp.json()
+            try:
+                resp = requests.get(
+                    f"{self.server_url}/history/{prompt_id}", timeout=10
+                )
+                resp.raise_for_status()
+                history = resp.json()
+                last_error = None
+            except requests.RequestException as exc:
+                last_error = exc
+                time.sleep(interval)
+                continue
             if prompt_id in history:
                 entry = history[prompt_id]
                 status = entry.get("status", {})
@@ -201,6 +220,10 @@ class ComfyUIClient:
                     raise ComfyUIError(f"Execution error: {msgs}")
                 return entry
             time.sleep(interval)
+        if last_error is not None:
+            raise ComfyUIError(
+                f"Prompt {prompt_id} did not complete within {timeout}s after poll errors: {last_error}"
+            )
         raise ComfyUIError(
             f"Prompt {prompt_id} did not complete within {timeout}s"
         )
@@ -268,8 +291,12 @@ class ComfyUIClient:
         interval: int = 5,
     ) -> list[Path]:
         """Submit → poll → download.  Returns list of artifact paths."""
+        existing_metadata = dict(getattr(self, "last_run_metadata", {}) or {})
+        self.last_run_metadata = existing_metadata
+        self.last_run_metadata.setdefault("server_url", self.server_url)
         prompt_id = self.submit(workflow)
         entry = self.poll(prompt_id, timeout=timeout, interval=interval)
+        self.last_run_metadata["prompt_id"] = prompt_id
 
         outputs = entry.get("outputs", {})
         node_output = outputs.get(output_node, {})
@@ -296,6 +323,14 @@ class ComfyUIClient:
                 item.get("type", "output"),
             )
             paths.append(target)
+        self.last_run_metadata["artifacts"] = [
+            {
+                "filename": item.get("filename"),
+                "subfolder": item.get("subfolder", ""),
+                "type": item.get("type", "output"),
+            }
+            for item in items
+        ]
         return paths
 
     # ------------------------------------------------------------------
